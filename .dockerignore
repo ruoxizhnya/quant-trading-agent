@@ -1,0 +1,6 @@
+.git
+.workbuddy
+node_modules
+dist
+bin
+*.exe

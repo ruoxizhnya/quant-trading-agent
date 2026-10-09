@@ -1,0 +1,108 @@
+// Strategy: {{.Name}}
+// Type: {{.Type}}
+// Description: {{.Description}}
+// Generated: {{.GeneratedAt}}
+
+package strategy
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/ruoxizhnya/quant-trading/pkg/domain"
+)
+
+// {{.Name}}Strategy implements the {{.Name}} trading strategy.
+type {{.Name}}Strategy struct {
+	params map[string]interface{}
+}
+
+// New{{.Name}}Strategy creates a new instance of the strategy.
+func New{{.Name}}Strategy() *{{.Name}}Strategy {
+	return &{{.Name}}Strategy{
+		params: map[string]interface{}{
+			{{- range .Params}}
+			"{{.Name}}": {{.Default}},
+			{{- end}}
+		},
+	}
+}
+
+// Name returns the strategy name.
+func (s *{{.Name}}Strategy) Name() string {
+	return "{{.Name}}"
+}
+
+// Description returns the strategy description.
+func (s *{{.Name}}Strategy) Description() string {
+	return "{{.Description}}"
+}
+
+// Parameters returns configurable parameters.
+func (s *{{.Name}}Strategy) Parameters() []Parameter {
+	return []Parameter{
+		{{- range .Params}}
+		{
+			Name:        "{{.Name}}",
+			Type:        "{{.Type}}",
+			Default:     {{.Default}},
+			Description: "{{.Description}}",
+		},
+		{{- end}}
+	}
+}
+
+// Configure sets strategy parameters.
+func (s *{{.Name}}Strategy) Configure(params map[string]interface{}) error {
+	for k, v := range params {
+		s.params[k] = v
+	}
+	return nil
+}
+
+// GenerateSignals generates trading signals based on the strategy logic.
+func (s *{{.Name}}Strategy) GenerateSignals(ctx context.Context, bars map[string][]domain.OHLCV, portfolio *domain.Portfolio) ([]Signal, error) {
+	var signals []Signal
+
+	for symbol, ohlcv := range bars {
+		if len(ohlcv) == 0 {
+			continue
+		}
+
+		// Strategy logic implementation
+		latest := ohlcv[len(ohlcv)-1]
+		
+		// TODO: Implement {{.Type}} strategy logic
+		// {{.Code}}
+
+		// Example signal generation
+		if len(ohlcv) >= 2 {
+			prev := ohlcv[len(ohlcv)-2]
+			if latest.Close > prev.Close {
+				signals = append(signals, Signal{
+					Symbol:    symbol,
+					Action:    "buy",
+					Strength:  1.0,
+					Price:     latest.Close,
+					Direction: domain.Long,
+				})
+			}
+		}
+	}
+
+	return signals, nil
+}
+
+// Weight calculates position weight based on signal strength.
+func (s *{{.Name}}Strategy) Weight(signal Signal, portfolioValue float64) float64 {
+	// Default equal weight
+	return 0.1
+}
+
+// Cleanup releases resources.
+func (s *{{.Name}}Strategy) Cleanup() {
+	// No resources to clean up
+}
+
+// Compile-time interface check
+var _ Strategy = (*{{.Name}}Strategy)(nil)
