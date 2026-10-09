@@ -1,0 +1,150 @@
+# Hermes Agent Configuration — A-Share Quantitative Researcher
+#
+# 部署路径: ~/.hermes/config/hermes.yaml
+# 项目源文件: docs/hermes/config/hermes.yaml
+# 关联: ADR-015 (AI Agent 架构), Hermes Agent Integration System Design §3.1
+#
+# 本文件定义 Hermes Agent 的执行环境、记忆系统和预算控制。
+# Go 后端不读取此文件 — 它是 Hermes 端的配置。
+# Go 端只通过 MCP (GET /api/tools) 暴露工具，对 Hermes 的配置无感知
+# (per System Design §7 "边界划分" — Hermes 是唯一工作流存储)。
+
+# ─── Agent Identity ───────────────────────────────────────────────────
+name: "quant-researcher"
+description: "A-share quantitative research agent — factor mining + strategy design + backtest validation"
+
+# ─── Model ───────────────────────────────────────────────────────────
+model:
+  # 隐私优先：本地 Ollama 部署（因子公式 / 回测数据不离开本机）
+  provider: "ollama"
+  model: "hermes-3:8b"
+
+  # 质量优先：云端 Together.ai（可选 — 切换到 70B 提升复杂推理）
+  # provider: "together"
+  # model: "nous-hermes-3-70b"
+
+  # 采样参数
+  temperature: 0.3        # 偏低 — 因子挖掘需要稳定性而非创造性
+  max_tokens: 4096        # 单次响应上限
+  top_p: 0.9
+
+# ─── Execution Environment ───────────────────────────────────────────
+execution:
+  environment: "docker"   # 沙盒执行 — 防止 LLM 生成的代码误伤主机
+  timeout: 300s           # 单次工具调用超时（L4 walk-forward 可能耗时数分钟）
+
+# ─── Memory ─────────────────────────────────────────────────────────
+memory:
+  # 轨迹记录 — 所有操作（工具调用 + LLM 推理）都会写入 trajectory
+  # 用于事后分析 + Skill 自动提炼
+  trajectory: true
+
+  # Skill 自动提炼 — 从轨迹中自动归纳可复用的工作流模式
+  skill_auto_extract: true
+
+  # 向量知识库 — 存储因子/策略的语义表示，支持相似性检索
+  # chromadb 本地部署，数据不出本机
+  vector_store: "chromadb"
+  vector_dim: 768          # all-MiniLM-L6-v2 默认维度
+
+  # 4 层记忆系统 (per Hermes docs):
+  # L1 — Working Memory:   当前会话的上下文窗口
+  # L2 — Episodic Memory:   trajectory 记录（上述 trajectory: true 控制）
+  # L3 — Semantic Memory:   向量知识库（vector_store 控制）
+  # L4 — Procedural Memory: Skills 目录 (~/.hermes/skills/*.md)
+
+# ─── Budget Control ──────────────────────────────────────────────────
+# 预算控制器 (ResearchBudget) — 防止自主循环累积成本
+# 伪代码见 System Design §8.2
+#
+# Two-layer budget model:
+# ┌─────────────────────────────────────────────────────────────────┐
+# │ Layer 1: Session-wide hard cap (本文件)                         │
+# │   max_cost_per_session / max_iterations / max_llm_calls         │
+# │   → Hermes 启动时读取，整个会话期间不可超过                      │
+# │   → 即使 Skill 传入更大的值，也会被截断到此 cap                   │
+# ├─────────────────────────────────────────────────────────────────┤
+# │ Layer 2: Per-skill-invocation soft default (Skill 输入)          │
+# │   autonomous_factor_mining.md 的 max_iterations 默认 30          │
+# │   → 比 session cap (50) 更保守，留出 headroom 给其他 Skill       │
+# │   → 调用方可显式传入更小的值（如验收测试用 20）                   │
+# └─────────────────────────────────────────────────────────────────┘
+budget:
+  max_cost_per_session: 5.0    # USD — 单次会话总成本上限
+  max_iterations: 50           # 单次会话最大迭代次数（session-wide hard cap）
+  max_llm_calls: 200           # 单次会话最大 LLM 调用次数
+
+  # 成本模型 (per System Design §8.2)
+  # cost = (tokens_in + tokens_out) / 1000 * rate
+  cost_model:
+    ollama_local:
+      rate: 0.0                # 本地部署不计费
+      note: "hermes-3:8b on Ollama — cost ≈ $0"
+    together_8b:
+      rate: 0.0002             # $0.0002 per 1K tokens
+      note: "Together.ai hermes-3-8b"
+    together_70b:
+      rate: 0.0006             # $0.0006 per 1K tokens (高质量模式)
+      note: "Together.ai nous-hermes-3-70b — 可选，复杂推理"
+
+# ─── MCP Tool Bridge ────────────────────────────────────────────────
+# Go 后端 (analysis-service :8085) 通过 MCP 暴露 19 个工具
+# 工具配置镜像见 docs/hermes/tools-quant-backtest.yaml
+mcp:
+  base_url: "http://localhost:8085"
+  discovery_endpoint: "/api/tools"
+  execute_endpoint_pattern: "/api/tools/{name}"
+  method: "POST"
+
+# ─── Skill Registry ─────────────────────────────────────────────────
+# Hermes 启动时扫描 ~/.hermes/skills/ 加载所有 .md 文件
+# 每个 Skill 文件用 YAML front matter 声明 name + description
+skills:
+  - name: "autonomous_factor_mining"
+    description: "自主因子挖掘循环 — L1-L4 验证门禁 + 基因池沉淀"
+    source: "docs/hermes/skills/autonomous_factor_mining.md"
+
+# ─── Prompt Template ────────────────────────────────────────────────
+# System Prompt — 定义研究员角色 + 能力 + 约束
+# 部署到 ~/.hermes/prompts/quant-research.md
+prompt:
+  source: "docs/hermes/prompts/quant-research.md"
+
+# ─── Safety Guardrails ─────────────────────────────────────────────
+safety:
+  # 强制 L4 Walk-Forward 验证 — 防止过拟合幻觉 (R1)
+  require_l4_before_save: true
+
+  # L1 语法门禁 + 表达式白名单 — 防止 LLM 幻觉因子 (R2)
+  require_l1_before_l2: true
+
+  # 数据不出本机 — 优先 Ollama 本地部署 (R4)
+  prefer_local_model: true
+
+  # L5 人工审核 — 高风险操作（如大仓位策略）需人工确认
+  # 当前自动通过；未来可接入通知系统
+  human_review:
+    enabled: false              # Phase 2: 自动模式；Phase 3+ 可启用
+    trigger_on:
+      - max_drawdown < -0.20   # 回测最大回撤超过 20%
+      - sharpe > 2.0           # Sharpe 异常高（可能过拟合或数据泄露）
+
+# ─── Logging ────────────────────────────────────────────────────────
+logging:
+  level: "info"                # debug | info | warn | error
+  format: "json"               # json | text
+  output:
+    - "stdout"
+    - "~/.hermes/logs/agent.log"
+  # 敏感字段脱敏
+  redact:
+    - "api_key"
+    - "token"
+    - "password"
+
+# ─── 变更日志 ───────────────────────────────────────────────────────
+# v1.0.0 (2026-07-02, Phase 2.4-2.5): Initial config.
+#   - Two-layer budget model documented (session cap 50 + skill default 30)
+#   - 3 cost models (ollama/together_8b/together_70b)
+#   - Safety guardrails aligned with System Design §附录A 风险登记
+#   - Skills registry references autonomous_factor_mining.md

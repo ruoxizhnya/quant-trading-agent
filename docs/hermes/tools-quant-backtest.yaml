@@ -1,0 +1,455 @@
+# MCP Tool Configuration — A-Share Quant Backtest Engine
+#
+# This file is the declarative MCP tool registry for the Hermes Agent.
+# It mirrors the 19 tools registered in the Go backend's Tools Registry
+# (cmd/analysis/setup.go → buildToolsRegistry). Hermes loads this at
+# startup for static tool discovery; the live schemas are also available
+# via GET /api/tools on the analysis-service.
+#
+# Source of truth: the Go implementation in pkg/tools/builtin/*.go.
+# This YAML is a human-readable mirror — if parameters drift, run
+# GET /api/tools to verify the canonical schema.
+#
+# Base URL: http://localhost:8085 (analysis-service)
+# Endpoint pattern: POST /api/tools/{tool_name}
+#
+# Phase 1 (Hermes Agent Integration): 16 tools across 7 groups.
+# Phase 2.2: +1 tool (get_strategy_lineage) — 17 tools across 8 groups.
+# Phase 2.3: +1 tool (get_market_regime) — 18 tools across 9 groups.
+# EQD-P2-1: +1 tool (research.profile) — 19 tools across 10 groups.
+
+# ─── Connection ──────────────────────────────────────────────────────
+base_url: "http://localhost:8085"
+discovery_endpoint: "/api/tools"
+execute_endpoint_pattern: "/api/tools/{name}"
+method: "POST"
+
+# ─── Tools ──────────────────────────────────────────────────────────
+tools:
+
+  # ═══ Group 1: Backtest (L3 gate) ═══════════════════════════════════
+  - name: "backtest.run"
+    description: >
+      Run a full backtest of a named strategy over a stock pool and date
+      range. Returns performance metrics (returns, Sharpe, drawdown, win
+      rate), portfolio equity curve, and trade list. This is the L3 gate —
+      standard backtest. For overfitting detection, follow with
+      walk_forward_validate.
+    endpoint: "/api/tools/backtest.run"
+    parameters:
+      - name: strategy_name
+        type: string
+        description: "Name of a registered strategy (see strategy.list). Example: 'momentum', 'dual_momentum'."
+        required: true
+      - name: stock_pool
+        type: "[]string"
+        description: "Stock symbols to trade, e.g. [\"000001.SZ\", \"600000.SH\"]."
+        required: true
+      - name: start_date
+        type: string
+        description: "Backtest start date (YYYY-MM-DD, inclusive)."
+        required: true
+      - name: end_date
+        type: string
+        description: "Backtest end date (YYYY-MM-DD, inclusive)."
+        required: true
+
+  # ═══ Group 2: Factor analysis (L1/L2 gates) ════════════════════════
+
+  - name: "factor.compute"
+    description: >
+      Compute raw factor values for a set of symbols over a date range.
+      Returns per-symbol-per-date factor values. Use this to inspect the
+      factor before evaluating its IC.
+    endpoint: "/api/tools/factor.compute"
+    parameters:
+      - name: formula
+        type: string
+        description: "Factor DSL expression, e.g. 'ts_rank(close, 20)'."
+        required: true
+      - name: symbols
+        type: "[]string"
+        description: "Stock symbols, e.g. [\"000001.SZ\", \"600000.SH\"]."
+        required: true
+      - name: start_date
+        type: string
+        description: "Start date (YYYY-MM-DD)."
+        required: true
+      - name: end_date
+        type: string
+        description: "End date (YYYY-MM-DD)."
+        required: true
+
+  - name: "factor.evaluate"
+    description: >
+      Evaluate a factor expression over symbols and date range with IC/IR
+      computation. Returns IC, IC IR, turnover, and IC decay analysis.
+    endpoint: "/api/tools/factor.evaluate"
+    parameters:
+      - name: formula
+        type: string
+        description: "Factor DSL expression to evaluate."
+        required: true
+      - name: symbols
+        type: "[]string"
+        description: "Stock symbols to evaluate over."
+        required: true
+      - name: start_date
+        type: string
+        description: "Evaluation window start (YYYY-MM-DD)."
+        required: true
+      - name: end_date
+        type: string
+        description: "Evaluation window end (YYYY-MM-DD)."
+        required: true
+
+  - name: "validate_factor"
+    description: >
+      Validate a factor DSL expression syntax (L1 gate, <1s). Checks that
+      the expression parses correctly and lists required data fields.
+      Does NOT compute IC or run backtest. Always call this before
+      compute_factor_ic to catch syntax errors early.
+    endpoint: "/api/tools/validate_factor"
+    parameters:
+      - name: expression
+        type: string
+        description: "Factor DSL expression, e.g. 'ts_rank(close, 20) * cs_rank(volume)'."
+        required: true
+
+  - name: "compute_factor_ic"
+    description: >
+      Compute the historical Information Coefficient (IC) of a factor
+      expression (L2 gate, <10s). Returns IC, IC IR, turnover, and IC
+      decay. Call after validate_factor passes. IC > 0.02 is meaningful;
+      > 0.05 is strong.
+    endpoint: "/api/tools/compute_factor_ic"
+    parameters:
+      - name: expression
+        type: string
+        description: "Factor DSL expression (must pass validate_factor first)."
+        required: true
+      - name: symbols
+        type: "[]string"
+        description: "Stock symbols to evaluate the factor over."
+        required: true
+      - name: start_date
+        type: string
+        description: "Evaluation window start (YYYY-MM-DD)."
+        required: true
+      - name: end_date
+        type: string
+        description: "Evaluation window end (YYYY-MM-DD)."
+        required: true
+
+  # ═══ Group 3: Data fetch ═══════════════════════════════════════════
+
+  - name: "data.ohlcv"
+    description: "Fetch OHLCV (Open-High-Low-Close-Volume) bars for a single stock."
+    endpoint: "/api/tools/data.ohlcv"
+    parameters:
+      - name: symbol
+        type: string
+        description: "Stock symbol, e.g. '000001.SZ'."
+        required: true
+      - name: start_date
+        type: string
+        description: "Start date (YYYY-MM-DD)."
+        required: true
+      - name: end_date
+        type: string
+        description: "End date (YYYY-MM-DD)."
+        required: true
+
+  - name: "data.stocks"
+    description: "List all stocks in the database, or get details for a specific symbol."
+    endpoint: "/api/tools/data.stocks"
+    parameters:
+      - name: symbol
+        type: string
+        description: "Optional stock symbol. If omitted, all stocks are returned."
+        required: false
+
+  - name: "data.fundamentals"
+    description: "Fetch fundamental data (PE, PB, ROE, etc.) for a stock."
+    endpoint: "/api/tools/data.fundamentals"
+    parameters:
+      - name: symbol
+        type: string
+        description: "Stock symbol, e.g. '000001.SZ'."
+        required: true
+      - name: start_date
+        type: string
+        description: "Optional start date (YYYY-MM-DD). If omitted, returns latest snapshot."
+        required: false
+      - name: end_date
+        type: string
+        description: "Optional end date (YYYY-MM-DD)."
+        required: false
+
+  # ═══ Group 4: Strategy registry ═════════════════════════════════════
+
+  - name: "strategy.list"
+    description: >
+      List all registered strategies with their names, descriptions, and
+      parameter schemas. Use this to discover available strategy names
+      for backtest.run.
+    endpoint: "/api/tools/strategy.list"
+    parameters: []
+
+  - name: "strategy.get"
+    description: "Get detailed metadata for a single strategy by name."
+    endpoint: "/api/tools/strategy.get"
+    parameters:
+      - name: name
+        type: string
+        description: "Strategy name (e.g. 'momentum', 'dual_momentum')."
+        required: true
+
+  # ═══ Group 5: Walk-forward validation (L4 gate) ════════════════════
+
+  - name: "walk_forward_validate"
+    description: >
+      Run walk-forward validation to detect overfitting (L4 gate, ~minutes).
+      Splits the date range into train/test windows, runs backtest on each,
+      and measures out-of-sample performance degradation. Returns avg OOS
+      Sharpe, degradation ratio, overfit score, and per-window breakdown.
+      Only call after L1-L3 gates pass. Slow (~minutes).
+    endpoint: "/api/tools/walk_forward_validate"
+    parameters:
+      - name: strategy_name
+        type: string
+        description: "Name of a previously-registered strategy to validate."
+        required: true
+      - name: stock_pool
+        type: "[]string"
+        description: "Stock symbols to validate over."
+        required: true
+      - name: start_date
+        type: string
+        description: "Validation window start (YYYY-MM-DD). Should span at least train_days+test_days."
+        required: true
+      - name: end_date
+        type: string
+        description: "Validation window end (YYYY-MM-DD)."
+        required: true
+      - name: train_days
+        type: int
+        description: "Training window size in trading days (~250 = 1 year)."
+        required: false
+        default: 250
+      - name: test_days
+        type: int
+        description: "Test window size in trading days (~60 = 3 months). Also used as step size."
+        required: false
+        default: 60
+
+  # ═══ Group 6: Gene Pool — factor + strategy CRUD ═══════════════════
+
+  - name: "list_factors"
+    description: >
+      Query the factor gene pool with optional filters. Returns factors
+      sorted by fitness (descending) — the most promising first. Call this
+      before creating a new factor to avoid duplicating existing work.
+    endpoint: "/api/tools/list_factors"
+    parameters:
+      - name: category
+        type: string
+        description: "Filter by category: 'momentum', 'value', 'quality', 'volatility'. Empty = all."
+        required: false
+      - name: min_ic
+        type: float
+        description: "Minimum IC threshold. 0.0 = no filter."
+        required: false
+        default: 0.0
+      - name: limit
+        type: int
+        description: "Maximum number of factors to return."
+        required: false
+        default: 20
+
+  - name: "save_factor"
+    description: >
+      Persist a validated factor to the gene pool. The factor must have
+      passed L1 (validate_factor) and L2 (compute_factor_ic) gates.
+      Returns a unique factor_id (format: fg_<uuid>).
+    endpoint: "/api/tools/save_factor"
+    parameters:
+      - name: name
+        type: string
+        description: "Human-readable name, e.g. 'price_momentum_20d'."
+        required: true
+      - name: category
+        type: string
+        description: "Category: 'momentum', 'value', 'quality', 'volatility', 'custom'."
+        required: true
+      - name: formula
+        type: string
+        description: "Factor DSL expression (the same string passed to validate_factor)."
+        required: true
+      - name: description
+        type: string
+        description: "What the factor measures and why it might work."
+        required: true
+      - name: rationale
+        type: string
+        description: "Economic rationale (optional but recommended)."
+        required: false
+      - name: ic
+        type: float
+        description: "Information Coefficient from compute_factor_ic."
+        required: true
+      - name: turnover
+        type: float
+        description: "Factor turnover (0..1). Lower is better for trading costs."
+        required: true
+      - name: sharpe
+        type: float
+        description: "Factor long-short Sharpe ratio (optional)."
+        required: false
+
+  - name: "list_strategies"
+    description: >
+      Query the strategy gene pool with optional filters. Returns
+      strategies sorted by fitness (descending). Each entry includes the
+      full YAML config for reproduction.
+    endpoint: "/api/tools/list_strategies"
+    parameters:
+      - name: strategy_type
+        type: string
+        description: "Filter by type: 'expression', 'momentum'. Empty = all."
+        required: false
+      - name: min_fitness
+        type: float
+        description: "Minimum fitness score. 0.0 = no filter."
+        required: false
+        default: 0.0
+      - name: limit
+        type: int
+        description: "Maximum number of strategies to return."
+        required: false
+        default: 20
+
+  - name: "save_strategy"
+    description: >
+      Persist a validated strategy to the gene pool. The strategy must
+      have passed L3 (backtest.run) and L4 (walk_forward_validate) gates.
+      Returns a unique strategy_id (format: sg_<uuid>).
+    endpoint: "/api/tools/save_strategy"
+    parameters:
+      - name: name
+        type: string
+        description: "Human-readable strategy name, e.g. 'dual_momentum_csi300'."
+        required: true
+      - name: strategy_yaml
+        type: string
+        description: "Strategy YAML config (ExpressionStrategy format). Stored verbatim."
+        required: true
+      - name: factor_ids
+        type: "[]string"
+        description: "IDs of factors used by this strategy (from save_factor)."
+        required: false
+      - name: sharpe
+        type: float
+        description: "Strategy Sharpe ratio from backtest.run."
+        required: true
+      - name: max_drawdown
+        type: float
+        description: "Maximum drawdown from backtest.run (negative, e.g. -0.12)."
+        required: true
+      - name: total_return
+        type: float
+        description: "Total return from backtest.run (e.g. 0.15 = +15%)."
+        required: true
+
+  # ═══ Group 7: Summarization ════════════════════════════════════════
+
+  - name: "summarize_backtest"
+    description: >
+      Compress a full BacktestResult JSON into a compact summary (~200
+      bytes vs ~50KB). Extracts the decision-relevant scalars (returns,
+      Sharpe, drawdown, win rate) and derives a risk_level. Call this
+      after backtest.run to keep the LLM context window manageable.
+    endpoint: "/api/tools/summarize_backtest"
+    parameters:
+      - name: result_json
+        type: string
+        description: "JSON-serialized BacktestResult from backtest.run. Pass the entire response body."
+        required: true
+
+  # ═══ Group 8: Lineage (Hermes Phase 2.2) ═════════════════════════════
+
+  - name: "get_strategy_lineage"
+    description: >
+      Recursively fetch the lineage (ancestor tree) of a strategy from
+      the gene pool. Use this to understand a strategy's mutation history
+      (which parents it was derived from) before mutating/improving it —
+      avoids re-discovering variants you already explored. Returns a
+      nested tree of ancestors with key metrics, plus diagnostics for
+      cycles (pathological data) and missing parent IDs (deleted or never
+      saved). Default max_depth=5; raise for deeper chains, lower to
+      speed up the call.
+    endpoint: "/api/tools/get_strategy_lineage"
+    parameters:
+      - name: strategy_id
+        type: string
+        description: "ID of the strategy whose lineage to retrieve (e.g. 'sg_abc123')."
+        required: true
+      - name: max_depth
+        type: int
+        description: "Maximum recursion depth. 0 = return only the root. Default 5. Clamped to 10 if higher."
+        required: false
+        default: 5
+
+  # ═══ Group 9: Market regime (Hermes Phase 2.3) ══════════════════════
+
+  - name: "get_market_regime"
+    description: >
+      Fetch market regime analysis (bull/bear/sideways trend + volatility
+      level + sentiment score) for a given symbol and date range. Defaults
+      to CSI 300 index (000300.SH) as the A-share market benchmark. Uses
+      moving-average crossover + volatility classification. Requires
+      sufficient OHLCV history (typically 200+ trading days). Use this
+      before strategy design to understand the prevailing market regime
+      and pick strategies that fit it.
+    endpoint: "/api/tools/get_market_regime"
+    parameters:
+      - name: start_date
+        type: string
+        description: "Analysis start date (YYYY-MM-DD, inclusive)."
+        required: true
+      - name: end_date
+        type: string
+        description: "Analysis end date (YYYY-MM-DD, inclusive)."
+        required: true
+      - name: symbol
+        type: string
+        description: "Symbol to analyze. Defaults to '000300.SH' (CSI 300 index). Override with any stock or index symbol."
+        required: false
+        default: "000300.SH"
+
+  # ══ Group 10: Research archive (EQD-P2-1, bridge B2) ═══════════════
+
+  - name: "research.profile"
+    description: >
+      Read the EquityDeep research archive for a ticker: the conclusions
+      recorded about the company (each carrying the ingest.raw citation
+      anchors that prove its numbers) and the questions still open. Use
+      this before designing fundamental/quality factors to learn what is
+      already known and what remains unverified. The archive is returned
+      verbatim — no LLM-side rewriting — along with a 'stale' verdict and
+      a 'needs_review' flag; when either is set, the conclusions must be
+      re-verified against fresh data before use. Served from the
+      research.* projection, falling back to the contract C2 mirror
+      ({EQUITYDEEP_VAULT_PATH}/{ticker}/_profile.json) when the ticker
+      was never projected. Returns 404 (code NOT_FOUND, "no_profile")
+      when the ticker has no archive at all.
+    endpoint: "/api/tools/research.profile"
+    parameters:
+      - name: ticker
+        type: string
+        description: "Stock code, bare ('600519') or with exchange suffix ('600519.SH'). Only .SH/.SZ/.BJ are accepted."
+        required: true
+      - name: sections
+        type: "[]string"
+        description: "Which sections to include: any of 'conclusions', 'questions'. Omitted or empty = both."
+        required: false
