@@ -35,6 +35,17 @@ RUN apk add --no-cache ca-certificates curl
 
 COPY --from=builder /app/ai-service /app/ai-service
 
+# 依赖等待脚本取自 core 仓（命名上下文 `core`），与 core 三个服务同一份。
+# compose 的 entrypoint 引用 /app/wait-for-deps.sh；少了这一行容器会
+# `can't open ...: No such file or directory` 直接退出（拆仓时漏带）。
+COPY --from=core deploy/wait-for-deps.sh /app/wait-for-deps.sh
+RUN chmod +x /app/wait-for-deps.sh
+
+# 配置也取自 core 仓：cmd/ai/main.go 读的是相对路径 config/ai-service.yaml，
+# 而该文件与 analysis-service.yaml **逐值一致**（同一实验不得在两个进程跑出
+# 不同结果），所以它的真相留在 core 的 config/ 目录，不在这里复制第二份。
+COPY --from=core config/ai-service.yaml /app/config/ai-service.yaml
+
 EXPOSE 8086
 
 CMD ["/app/ai-service"]
