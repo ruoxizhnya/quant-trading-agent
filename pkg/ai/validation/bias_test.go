@@ -1,6 +1,9 @@
 package validation
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func hasBiasChallenge(r BiasResult, severity string) bool {
 	for _, c := range r.Challenges {
@@ -118,6 +121,43 @@ func TestBias_CurrentPoolIsSurvivorshipBias(t *testing.T) {
 	}
 	if got.Survivorship > 0.05 {
 		t.Fatalf("幸存者偏差应贴地板，实际 %.3f", got.Survivorship)
+	}
+}
+
+// biasChallengeMessages 拼接偏差维所有质疑文案（子维度可能不止一条）。
+func biasChallengeMessages(r BiasResult) string {
+	var sb strings.Builder
+	for _, c := range r.Challenges {
+		if c.Dimension == DimensionBias {
+			sb.WriteString(c.Message)
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+// PoolSize 未测量时不得把零值 0 当实测值打印（不能出现「0 只」）。
+func TestBias_CurrentPoolWithoutSizeSaysUnmeasured(t *testing.T) {
+	got := ValidateBias(BiasInput{PoolSource: PoolSourceCurrent})
+
+	if !hasBiasChallenge(got, SeverityBlocking) {
+		t.Fatalf("按今天名单取池子仍是 blocking：%+v", got.Challenges)
+	}
+	msg := biasChallengeMessages(got)
+	if !strings.Contains(msg, "未测量") {
+		t.Fatalf("池子规模未测量时文案应明说未测量：%q", msg)
+	}
+	if strings.Contains(msg, "0 只") {
+		t.Fatalf("未测量时不得打印零值数量（「0 只」不是实测值）：%q", msg)
+	}
+}
+
+func TestBias_CurrentPoolWithSizePrintsCount(t *testing.T) {
+	got := ValidateBias(BiasInput{PoolSource: PoolSourceCurrent, PoolSize: 300})
+
+	msg := biasChallengeMessages(got)
+	if !strings.Contains(msg, "300 只") {
+		t.Fatalf("池子规模有实测值时应带真实数量（300 只）：%q", msg)
 	}
 }
 

@@ -293,6 +293,15 @@ func biasChallenges(in BiasInput, r BiasResult) []Challenge {
 
 	// --- 幸存者 ---
 	switch {
+	// PoolSize 未测量时不打印数量 —— 零值 0 不是实测值，别让「0 只」
+	// 冒充测量结果。措辞对齐其他子维度的「未评估」分支。
+	case in.PoolSource == PoolSourceCurrent && in.PoolSize <= 0:
+		cs = append(cs, Challenge{
+			Dimension: DimensionBias,
+			Severity:  SeverityBlocking,
+			Message: "股票池按**今天**的上市名单取（池子规模未测量）—— 期间退市的票根本不在池子里。" +
+				"这是幸存者偏差最典型的形态，收益被系统性高估，且高估多少无法从结果看出。",
+		})
 	case in.PoolSource == PoolSourceCurrent:
 		cs = append(cs, Challenge{
 			Dimension: DimensionBias,
