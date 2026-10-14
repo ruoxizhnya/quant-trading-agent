@@ -15,14 +15,14 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/ruoxizhnya/quant-trading-agent/pkg/copilot"
-	"github.com/ruoxizhnya/quant-trading/pkg/bootstrap"
 	"github.com/ruoxizhnya/quant-trading-agent/pkg/ai"
 	"github.com/ruoxizhnya/quant-trading-agent/pkg/ai/client"
 	"github.com/ruoxizhnya/quant-trading-agent/pkg/ai/tools"
 	"github.com/ruoxizhnya/quant-trading-agent/pkg/ai/tools/builtin"
+	"github.com/ruoxizhnya/quant-trading-agent/pkg/copilot"
 	"github.com/ruoxizhnya/quant-trading/pkg/backtest"
 	"github.com/ruoxizhnya/quant-trading/pkg/backtest/contracts"
+	"github.com/ruoxizhnya/quant-trading/pkg/bootstrap"
 	"github.com/ruoxizhnya/quant-trading/pkg/domain"
 	"github.com/ruoxizhnya/quant-trading/pkg/sandbox/runner"
 	"github.com/ruoxizhnya/quant-trading/pkg/sandbox/staticcheck"
@@ -153,17 +153,17 @@ func (a *StrategyEngineAdapter) RunBacktest(
 	// 的 fail-loud 语义。Trades / PortfolioValues 等字段此前就未透传（大数组，
 	// 且 AI 侧消费者不读），不在本单范围，保持原行为。
 	return &domain.BacktestResult{
-		TotalReturn:    resp.TotalReturn,
-		AnnualReturn:   resp.AnnualReturn,
-		SharpeRatio:    resp.SharpeRatio,
-		SortinoRatio:   resp.SortinoRatio,
-		MaxDrawdown:    resp.MaxDrawdown,
-		WinRate:        resp.WinRate,
-		TotalTrades:    resp.TotalTrades,
-		WinTrades:      resp.WinTrades,
-		LoseTrades:     resp.LoseTrades,
-		AvgHoldingDays: resp.AvgHoldingDays,
-		CalmarRatio:    resp.CalmarRatio,
+		TotalReturn:     resp.TotalReturn,
+		AnnualReturn:    resp.AnnualReturn,
+		SharpeRatio:     resp.SharpeRatio,
+		SortinoRatio:    resp.SortinoRatio,
+		MaxDrawdown:     resp.MaxDrawdown,
+		WinRate:         resp.WinRate,
+		TotalTrades:     resp.TotalTrades,
+		WinTrades:       resp.WinTrades,
+		LoseTrades:      resp.LoseTrades,
+		AvgHoldingDays:  resp.AvgHoldingDays,
+		CalmarRatio:     resp.CalmarRatio,
 		UniverseMaxSize: resp.UniverseMaxSize,
 		InvalidReasons:  resp.InvalidReasons,
 	}, nil
