@@ -22,23 +22,21 @@ import (
 
 func TestPumpStream_CompletedRunEmitsProgressThenComplete(t *testing.T) {
 	var events []string
-	err := pumpStream(context.Background(), time.Hour, // 首帧即 done，用不到 ticker
+	pumpStream(context.Background(), time.Hour, // 首帧即 done，用不到 ticker
 		func() ExploreStatusResponse { return ExploreStatusResponse{RunID: "r", Running: false} },
-		func(ev string, _ ExploreStatusResponse) error { events = append(events, ev); return nil })
-	require.NoError(t, err)
+		func(ev string, _ ExploreStatusResponse) { events = append(events, ev) })
 	assert.Equal(t, []string{"progress", "complete"}, events, "已跑完的 run 应首帧判完、发完即停")
 }
 
 func TestPumpStream_RunningThenDoneEmitsProgressPerTick(t *testing.T) {
 	var events []string
 	calls := 0
-	err := pumpStream(context.Background(), 5*time.Millisecond,
+	pumpStream(context.Background(), 5*time.Millisecond,
 		func() ExploreStatusResponse {
 			calls++
 			return ExploreStatusResponse{RunID: "r", Running: calls < 3} // 第 3 次判为跑完
 		},
-		func(ev string, _ ExploreStatusResponse) error { events = append(events, ev); return nil })
-	require.NoError(t, err)
+		func(ev string, _ ExploreStatusResponse) { events = append(events, ev) })
 	assert.Equal(t, []string{"progress", "progress", "progress", "complete"}, events)
 }
 
@@ -48,14 +46,12 @@ func TestPumpStream_RunningThenDoneEmitsProgressPerTick(t *testing.T) {
 func TestPumpStream_CtxCancelStopsPushWithoutComplete(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var events []string
-	err := pumpStream(ctx, time.Hour,
+	pumpStream(ctx, time.Hour,
 		func() ExploreStatusResponse { return ExploreStatusResponse{RunID: "r", Running: true} },
-		func(ev string, _ ExploreStatusResponse) error {
+		func(ev string, _ ExploreStatusResponse) {
 			events = append(events, ev)
 			cancel() // 模拟首帧之后客户端断开
-			return nil
 		})
-	require.NoError(t, err)
 	assert.Equal(t, []string{"progress"}, events, "断线应停在 progress，不发 complete")
 }
 

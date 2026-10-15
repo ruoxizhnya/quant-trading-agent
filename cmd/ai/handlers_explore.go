@@ -416,32 +416,30 @@ func (h *ExploreHandler) Stream(c *gin.Context) {
 
 	// 节奏逻辑抽进 pumpStream，让「终止 / 断线」语义脱离网络计时可被确定性测试；
 	// 这里只负责把 gin 的 SSE 写入接成 emit。
-	_ = pumpStream(c.Request.Context(), 2*time.Second,
+	pumpStream(c.Request.Context(), 2*time.Second,
 		func() ExploreStatusResponse { return h.statusOf(runID, run) },
-		func(event string, snap ExploreStatusResponse) error {
+		func(event string, snap ExploreStatusResponse) {
 			c.SSEvent(event, snap)
 			c.Writer.Flush()
-			return nil
 		})
 }
 
 // pumpStream 推「progress →（跑完时）complete」直到本轮结束或 ctx 取消。
 //
-// snapshot 每次取当下状态，emit 写一帧（返回 error 表示连接已断，立即停）。
-// ⚠️ ctx 取消只是**停推**——本函数拿不到 run 的 cancel，也就无从取消探索，
-// 这正是「连接生命周期 ≠ run 生命周期」的结构保证（叫停只走 POST /runs/:runID/stop）。
+// snapshot 每次取当下状态，emit 写一帧。⚠️ ctx 取消只是**停推**——本函数拿不到
+// run 的 cancel，也就无从取消探索，这正是「连接生命周期 ≠ run 生命周期」的结构
+// 保证（叫停只走 POST /runs/:runID/stop）。断线由 ctx 感知，无需对写失败另设分支。
 //
 // 首帧若已跑完就立刻 progress + complete 返回，不留一个空转到超时的连接。
 func pumpStream(ctx context.Context, interval time.Duration,
 	snapshot func() ExploreStatusResponse,
-	emit func(event string, snap ExploreStatusResponse) error,
-) error {
+	emit func(event string, snap ExploreStatusResponse),
+) {
 	snap := snapshot()
-	if err := emit("progress", snap); err != nil {
-		return err
-	}
+	emit("progress", snap)
 	if !snap.Running {
-		return emit("complete", snap)
+		emit("complete", snap)
+		return
 	}
 
 	ticker := time.NewTicker(interval)
@@ -449,14 +447,13 @@ func pumpStream(ctx context.Context, interval time.Duration,
 	for {
 		select {
 		case <-ctx.Done():
-			return nil // 断线只停推，不 cancel run
+			return // 断线只停推，不 cancel run
 		case <-ticker.C:
 			snap := snapshot()
-			if err := emit("progress", snap); err != nil {
-				return err
-			}
+			emit("progress", snap)
 			if !snap.Running {
-				return emit("complete", snap)
+				emit("complete", snap)
+				return
 			}
 		}
 	}
