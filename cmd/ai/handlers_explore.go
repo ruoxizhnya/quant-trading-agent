@@ -162,6 +162,7 @@ func (h *ExploreHandler) RegisterExploreRoutes(router *gin.RouterGroup) {
 	{
 		g.POST("/runs", h.Start)
 		g.GET("/runs/:runID", h.Status)
+		g.GET("/runs/:runID/stream", h.Stream)
 		g.POST("/runs/:runID/stop", h.Stop)
 	}
 }
@@ -336,16 +337,22 @@ func (h *ExploreHandler) reviewBestCausally(
 	h.recordVerdict(runID, *out.Best)
 }
 
-// Status 查一轮探索的实时进度。
+// Status 查一轮探索的实时进度（轮询端点）。
 func (h *ExploreHandler) Status(c *gin.Context) {
+	runID := c.Param("runID")
 	h.mu.Lock()
-	run, ok := h.runs[c.Param("runID")]
+	run, ok := h.runs[runID]
 	h.mu.Unlock()
 	if !ok {
 		httpserver.Fail(c, http.StatusNotFound, "run not found")
 		return
 	}
+	c.JSON(http.StatusOK, h.statusOf(runID, run))
+}
 
+// statusOf 持 run.mu 取一份当前快照。轮询端点与 SSE 共用它，保证两条路推出去
+// 的 JSON 一字不差 —— 前端 EventSource 和 poll 能复用同一套类型。
+func (h *ExploreHandler) statusOf(runID string, run *exploreRun) ExploreStatusResponse {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 
@@ -369,7 +376,7 @@ func (h *ExploreHandler) Status(c *gin.Context) {
 	}
 
 	resp := ExploreStatusResponse{
-		RunID:    c.Param("runID"),
+		RunID:    runID,
 		Running:  !run.done,
 		Attempts: views,
 	}
@@ -380,7 +387,79 @@ func (h *ExploreHandler) Status(c *gin.Context) {
 			resp.BestSeq = &seq
 		}
 	}
-	c.JSON(http.StatusOK, resp)
+	return resp
+}
+
+// Stream 用 SSE 把一轮探索的实时状态推给观察页，替代每 2.5s 一次的轮询：
+// 一条长连接只占限流器 1 次请求，从根上把 429 与「真失败」分开（OPS-01）。
+//
+// 形状复用 core 先例 data-service 的 sseProgressHandler —— 轮询内存快照转推，
+// 不为省这几秒引入多订阅 fan-out。
+//
+// ⚠️ 客户端断线只是**停推**：这一轮用的是 Start 里 context.Background() 派生的
+// 独立 cancel（见 handlers_explore.go Start 的注释），绝不因为连接断了就取消
+// 探索 —— 叫停只走 POST /runs/:runID/stop。
+func (h *ExploreHandler) Stream(c *gin.Context) {
+	runID := c.Param("runID")
+	h.mu.Lock()
+	run, ok := h.runs[runID]
+	h.mu.Unlock()
+	if !ok {
+		httpserver.Fail(c, http.StatusNotFound, "run not found")
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	// 节奏逻辑抽进 pumpStream，让「终止 / 断线」语义脱离网络计时可被确定性测试；
+	// 这里只负责把 gin 的 SSE 写入接成 emit。
+	_ = pumpStream(c.Request.Context(), 2*time.Second,
+		func() ExploreStatusResponse { return h.statusOf(runID, run) },
+		func(event string, snap ExploreStatusResponse) error {
+			c.SSEvent(event, snap)
+			c.Writer.Flush()
+			return nil
+		})
+}
+
+// pumpStream 推「progress →（跑完时）complete」直到本轮结束或 ctx 取消。
+//
+// snapshot 每次取当下状态，emit 写一帧（返回 error 表示连接已断，立即停）。
+// ⚠️ ctx 取消只是**停推**——本函数拿不到 run 的 cancel，也就无从取消探索，
+// 这正是「连接生命周期 ≠ run 生命周期」的结构保证（叫停只走 POST /runs/:runID/stop）。
+//
+// 首帧若已跑完就立刻 progress + complete 返回，不留一个空转到超时的连接。
+func pumpStream(ctx context.Context, interval time.Duration,
+	snapshot func() ExploreStatusResponse,
+	emit func(event string, snap ExploreStatusResponse) error,
+) error {
+	snap := snapshot()
+	if err := emit("progress", snap); err != nil {
+		return err
+	}
+	if !snap.Running {
+		return emit("complete", snap)
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil // 断线只停推，不 cancel run
+		case <-ticker.C:
+			snap := snapshot()
+			if err := emit("progress", snap); err != nil {
+				return err
+			}
+			if !snap.Running {
+				return emit("complete", snap)
+			}
+		}
+	}
 }
 
 // Stop 叫停一轮探索。已跑的不丢 —— 这正是「被叫停的探索」与「跑满的探索」
